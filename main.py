@@ -3,7 +3,7 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.properties import StringProperty, ListProperty, ObjectProperty
 from kivy.clock import Clock
 from kivy.lang import Builder
-from kivy.utils import platform # Androidプラットフォーム判定のため
+from kivy.utils import platform
 
 # gTTSとre、datetimeはTkinter版からそのまま利用
 from gtts import gTTS
@@ -13,33 +13,90 @@ import re
 from datetime import datetime
 
 # Kivy環境での音声再生のためのインポート
-from kivy.core.audio import SoundLoader
-# AndroidネイティブAPIを呼び出すためのpyjniusは後で実装
+# from kivy.core.audio import SoundLoader # KivyのSoundLoaderは使用しない
+import time # 再生待機用
+
+# AndroidネイティブAPIを呼び出すためのpyjnius (Android環境でのみ有効)
+if platform == 'android':
+    try:
+        from jnius import autoclass
+        MediaPlayer = autoclass('android.media.MediaPlayer')
+        AudioManager = autoclass('android.media.AudioManager')
+        Context = autoclass('android.content.Context')
+        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+        activity = PythonActivity.mActivity
+        print("Android MediaPlayerを初期化しました。")
+        AUDIO_PLAYBACK_METHOD = 'android_mediaplayer'
+    except Exception as e:
+        print(f"Android MediaPlayerの初期化に失敗しました: {e}. Kivy SoundLoaderを代替として使用します。")
+        from kivy.core.audio import SoundLoader
+        AUDIO_PLAYBACK_METHOD = 'kivy_soundloader'
+else:
+    # PC (Linux/Windows) 環境ではKivy SoundLoaderを使用
+    from kivy.core.audio import SoundLoader
+    AUDIO_PLAYBACK_METHOD = 'kivy_soundloader'
+    print("PC環境なのでKivy SoundLoaderを使用します。")
 
 # --- 関数定義 ---
 
 MAX_CHARS_PER_AUDIO = 300
 AUDIO_DIR_NAME = "generated_audio"
 
-# ★★★ Kivy版の音声再生関数 (最初はKivyのSoundLoaderで試す) ★★★
-# AndroidネイティブAPIを使う場合は、この関数を置き換える
-def play_mp3_kivy(filepath):
+# ★★★ Kivy版の音声再生関数 (AndroidネイティブAPI優先) ★★★
+def play_mp3_kivy_android(filepath):
+    """
+    Kivy/Android環境でMP3ファイルを再生する関数。
+    AndroidではMediaPlayer、PC/FallbackではKivy SoundLoaderを使用。
+    """
     if not os.path.exists(filepath):
         print(f"Error: Audio file not found at {filepath}")
-        return
+        return False # 再生失敗
+
+    if AUDIO_PLAYBACK_METHOD == 'android_mediaplayer':
+        try:
+            player = MediaPlayer()
+            player.setAudioStreamType(AudioManager.STREAM_MUSIC)
+            player.setDataSource(filepath)
+            player.prepare()
+            player.start()
+
+            # 再生が終了するまで待機
+            # Android MediaPlayerは非同期なので、再生終了をポーリングで待つ
+            while player.isPlaying():
+                time.sleep(0.1)
+            
+            player.release() # リソースを解放
+            print(f"Played with Android MediaPlayer: {filepath}")
+            return True # 再生成功
+        except Exception as e:
+            print(f"Error playing with Android MediaPlayer: {e}. Falling back to Kivy SoundLoader.")
+            # エラー発生時はKivy SoundLoaderで再試行 (このブロックはAndroidでしか実行されない)
+            return play_mp3_kivy(filepath) # Kivy SoundLoaderでの再生を試みる (下記の関数)
     
+    elif AUDIO_PLAYBACK_METHOD == 'kivy_soundloader':
+        # PC環境またはAndroid MediaPlayerが失敗した場合のKivy SoundLoaderでの再生
+        return play_mp3_kivy(filepath) # Kivy SoundLoaderでの再生 (下記の関数)
+    
+    return False # どの方法でも再生できなかった
+
+
+def play_mp3_kivy(filepath):
+    """KivyのSoundLoaderでMP3ファイルを再生する (PC環境やFallback用)"""
     sound = SoundLoader.load(filepath)
     if sound:
-        print(f"Playing with Kivy SoundLoader: {filepath}")
+        print(f"Played with Kivy SoundLoader: {filepath}")
         sound.play()
-        # Kivy SoundLoaderは再生終了イベントを直接待てないので、
-        # 再生時間の長さに基づいてスレッドを一時停止
-        # (これは正確ではないが、まずは動作確認用)
+        # SoundLoaderは再生終了を直接待てないので、長さを取得して待機
         duration = sound.length
-        threading.Event().wait(duration + 0.5) # 再生時間+少し待つ
-        sound.unload() # メモリ解放
+        if duration > 0:
+            time.sleep(duration + 0.5) # 再生時間+少し待つ
+        else:
+            time.sleep(2) # 長さが不明な場合は固定時間待つ
+        sound.unload()
+        return True
     else:
         print(f"Error: Could not load sound file {filepath} with Kivy SoundLoader.")
+        return False
 
 
 # --- KivyのUI部分とロジックを統合したルートウィジェットクラス ---
@@ -47,26 +104,20 @@ class LongTalkerLayout(BoxLayout):
     status_text = StringProperty("ここにステータスが表示されます")
     selected_lang_display = StringProperty("日本語 (ja)")
     
-    # Tkinterの言語リストをKivyのSpinner用にそのまま利用
     languages_for_kivy = ListProperty([
         '日本語 (ja)', '英語 (en)', '韓国語 (ko)', '中国語 (zh-CN)',
         'フランス語 (fr)', 'ドイツ語 (de)', 'スペイン語 (es)'
     ])
 
-    # KivyのTextInputウィジェットにアクセスするためのObjectPropertyを追加
-    text_input_widget = ObjectProperty(None) # Kvファイルでid:text_inputに結びつける
+    text_input_widget = ObjectProperty(None)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # 初期言語コード設定
         self.lang_code = 'ja'
         self.set_lang_code(self.selected_lang_display)
-
-        # 音声ファイルが保存されるルートフォルダがなければ作成 (初回起動時など)
         os.makedirs(AUDIO_DIR_NAME, exist_ok=True)
 
     def set_lang_code(self, full_lang_name):
-        """言語選択が変更されたときに言語コードを更新する"""
         if '(' in full_lang_name and ')' in full_lang_name:
             self.lang_code = full_lang_name.split('(')[1][:-1]
         else:
@@ -75,14 +126,13 @@ class LongTalkerLayout(BoxLayout):
         print(f"言語コードを {self.lang_code} に設定しました。")
 
     def start_audio_process_threaded(self):
-        """UIが固まらないように、別スレッドで音声作成処理を開始する"""
         original_text = self.ids.text_input.text.strip()
         
         if not original_text:
             self.update_status_on_main_thread("テキストが入力されていません", "red")
             return
 
-        self.set_ui_state(False) # UIを無効化
+        self.set_ui_state(False)
         self.update_status_on_main_thread("処理を開始します...", "blue")
 
         thread = threading.Thread(target=self._create_and_play_audio_logic, args=(original_text, self.lang_code))
@@ -90,7 +140,6 @@ class LongTalkerLayout(BoxLayout):
         thread.start()
 
     def _create_and_play_audio_logic(self, original_text, lang_code):
-        """音声作成と再生の処理本体 (スレッド内で実行)"""
         try:
             self.update_status_on_main_thread("テキストを分割中...", "blue")
             segments = self._split_long_text(original_text)
@@ -112,7 +161,7 @@ class LongTalkerLayout(BoxLayout):
             
             audio_files_to_play = []
 
-            for i, segment in enumerate(final_segments):
+            for i, segment in enumerate(segments): # final_segments -> segments に修正
                 filename = os.path.join(full_audio_path, f"{i+1:03d}.mp3")
                 self.update_status_on_main_thread(f"音声ファイル {i+1}/{len(segments)} を作成中...", "blue")
 
@@ -125,7 +174,7 @@ class LongTalkerLayout(BoxLayout):
             # --- 音声の連続再生 ---
             for i, audio_file in enumerate(audio_files_to_play):
                 self.update_status_on_main_thread(f"再生中: {i+1}/{len(audio_files_to_play)} - '{os.path.basename(audio_file)}'", "purple")
-                play_mp3_kivy(audio_file) # Kivy版の再生関数を呼び出す
+                play_mp3_kivy_android(audio_file) # ★★★ Kivy/Android版の再生関数を呼び出す ★★★
             
             self.update_status_on_main_thread(f"すべての音声ファイルの再生が完了しました。フォルダ: '{full_audio_path}'", "green")
     
@@ -139,9 +188,21 @@ class LongTalkerLayout(BoxLayout):
         """フォルダを選択し、その中のMP3ファイルを連続再生する (別スレッド)"""
         # Kivyでファイルダイアログを使うには、プラットフォーム固有のモジュールか、
         # kivy.filebrowserなどのGardenライブラリが必要になる。
-        # まずは直接フォルダパスを指定するか、次のステップで実装。
-        self.update_status_on_main_thread("フォルダ選択再生機能はまだPC版のみ対応 (Kivy版は後で実装)", "orange")
-        # Tkinter版の filedialog.askdirectory() の代わりに、Kivyでは別の方法が必要
+        # APK化の際は、事前にファイルをSDカードなどに配置する前提でパスを直接指定するか、
+        # アプリ内にバンドルするなどの工夫が必要。この段階ではPC版のみの機能としておく。
+        self.update_status_on_main_thread("フォルダ選択再生機能は現在PC版のみ対応", "orange")
+        # if platform == 'android':
+        #     self.update_status_on_main_thread("Android版のフォルダ選択は未実装です", "red")
+        #     return
+        # else:
+        #     # PC版であれば、tkinter.filedialogのような機能を持つ外部ライブラリを使うか、
+        #     # Kivy Gardenのファイルブラウザを使用
+        #     self._select_and_play_audio_folder_pc() # PC版のロジックを呼び出す
+
+    # def _select_and_play_audio_folder_pc(self):
+    #     # TkinterFileDialogを呼び出すためのロジックをここに書く
+    #     pass
+
 
     def _split_long_text(self, original_text):
         """Tkinter版から移植した長文分割ロジック"""
@@ -183,11 +244,9 @@ class LongTalkerLayout(BoxLayout):
 
     def update_status_on_main_thread(self, message, color_name="black"):
         """メインスレッドでUIを更新するためのヘルパー"""
-        # Kivyはメインスレッド以外からのUI操作を推奨しないためClock.schedule_onceを使う
         Clock.schedule_once(lambda dt: self._set_status_text_and_color(message, color_name))
 
     def _set_status_text_and_color(self, message, color_name):
-        # Kvファイルで定義されたstatus_labelのテキストと色を変更
         self.ids.status_label.text = message
         color_map = {
             "red": (1, 0, 0, 1),
@@ -197,7 +256,6 @@ class LongTalkerLayout(BoxLayout):
             "purple": (0.5, 0, 0.5, 1),
             "black": (0, 0, 0, 1),
         }
-        # KivyのColorクラスで色を直接指定
         self.ids.status_label.color = color_map.get(color_name, (0, 0, 0, 1))
 
     def update_ui_state_on_main_thread(self, enable):
@@ -213,7 +271,6 @@ class LongTalkerLayout(BoxLayout):
 
 
     def paste_text(self):
-        """クリップボードからテキストを貼り付ける"""
         from kivy.core.clipboard import Clipboard
         try:
             text = Clipboard.get()
@@ -223,7 +280,6 @@ class LongTalkerLayout(BoxLayout):
             self.update_status_on_main_thread(f"クリップボードエラー: {e}", "orange")
 
     def clear_text(self):
-        """テキスト入力欄とステータス表示をクリアする"""
         self.ids.text_input.text = ""
         self.update_status_on_main_thread("テキスト入力欄をクリアしました", "black")
 
