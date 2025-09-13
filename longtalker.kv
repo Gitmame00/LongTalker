@@ -12,34 +12,34 @@
         text: ''
         hint_text: 'ここに読み上げたいテキストを入力してください'
         size_hint_y: 0.6 # 画面の60%を占める
-        font_size: '18sp' # フォントサイズを調整
-        multiline: True # 複数行入力可能
-        valign: 'top' # 上揃え
-        padding: dp(10) # 内側のパディング
+        font_size: '18sp'
+        multiline: True
+        valign: 'top'
+        padding: dp(10)
 
     # 操作ボタンと言語選択をまとめる水平フレーム (Tkinterのbutton_frame)
     BoxLayout:
         orientation: 'horizontal'
         size_hint_y: None # 高さを固定
-        height: dp(48) # Tkinterの高さに合わせる
-        spacing: dp(5) # ボタン間のスペース
+        height: dp(48)
+        spacing: dp(5)
 
         Label:
             text: '言語:'
-            size_hint_x: None # 幅をコンテンツに合わせる
+            size_hint_x: None
             width: dp(60)
-            halign: 'left' # 左揃え
-            valign: 'middle' # 中央揃え
+            halign: 'left'
+            valign: 'middle'
 
         Spinner:
             id: lang_spinner
-            text: root.selected_lang_display # 初期表示
-            values: root.languages_for_kivy # Python側で定義したリスト
-            size_hint_x: None # 幅を固定
-            width: dp(150) # Comboboxの幅に合わせる
-            on_text: root.set_lang_code(self.text) # 選択が変更されたらPythonのメソッドを呼び出す
+            text: root.selected_lang_display
+            values: root.languages_for_kivy
+            size_hint_x: None
+            width: dp(150)
+            on_text: root.set_lang_code(self.text)
 
-        Widget: # スペーサー (Tkinterのpadx=(0, 20)の代わり)
+        Widget: # スペーサー
             size_hint_x: None
             width: dp(20)
 
@@ -47,14 +47,14 @@
             id: paste_button
             text: '貼り付け'
             size_hint_x: None
-            width: dp(100) # ボタンの幅
-            on_release: root.paste_text() # ボタンが離されたらメソッドを呼び出す
+            width: dp(100)
+            on_release: root.paste_text()
 
         Button:
             id: clear_button
             text: 'クリア'
             size_hint_x: None
-            width: dp(100) # ボタンの幅
+            width: dp(100)
             on_release: root.clear_text()
 
     # メインの実行ボタン (Tkinterのcreate_button)
@@ -62,20 +62,34 @@
         id: create_button
         text: '音声ファイルを作成して再生'
         size_hint_y: None
-        height: dp(55) # 少し大きめに
-        font_size: '18sp' # フォントサイズ
-        background_normal: '' # デフォルトの背景画像を無効化
-        background_color: 0.29, 0.68, 0.31, 1 # #4CAF50のRGBa値 (Kivyは0-1で指定)
-        color: 1, 1, 1, 1 # 文字色 (白)
-        on_release: root.start_audio_process() # ボタンが離されたらメソッドを呼び出す
+        height: dp(55)
+        font_size: '18sp'
+        background_normal: ''
+        background_color: 0.29, 0.68, 0.31, 1
+        color: 1, 1, 1, 1
+        on_release: root.start_audio_process_threaded()
+
+    # 新しい再生ボタン (Kivy版では一旦コメントアウトまたは無効化)
+    # Kivyでファイルダイアログを使うには追加のライブラリが必要
+    Button:
+        id: play_folder_button
+        text: 'フォルダから再生 (PC版のみ)' # 機能はまだ実装せず、無効化
+        size_hint_y: None
+        height: dp(55)
+        font_size: '18sp'
+        background_normal: ''
+        background_color: 0.13, 0.59, 0.95, 1 # 青系の色
+        color: 1, 1, 1, 1
+        disabled: True # このボタンはPC版のみなので、Kivyでは一時的に無効化
+        # on_release: root.start_folder_playback_threaded() # 後で実装
 
     # ステータス表示用ラベル (Tkinterのstatus_label)
     Label:
         id: status_label
-        text: root.status_text # Python側で定義したプロパティ
+        text: root.status_text
         size_hint_y: None
-        height: dp(30) # 高さを固定
-        text_size: self.width, None # テキストの折り返しを有効に
-        halign: 'left' # 左揃え
-        valign: 'top' # 上揃え
+        height: dp(30)
+        text_size: self.width, None
+        halign: 'left'
+        valign: 'top'
         color: root.ids.status_label.color # Python側で設定した色を反映
