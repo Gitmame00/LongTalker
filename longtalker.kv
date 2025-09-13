@@ -1,26 +1,23 @@
 #:kivy 2.1.0
 
-# Tkinter版のレイアウトをKivyのBoxLayoutで再現
 <LongTalkerLayout>:
     orientation: 'vertical'
     padding: dp(10)
     spacing: dp(10)
 
-    # テキスト入力エリア (TkinterのText)
     TextInput:
         id: text_input
         text: ''
         hint_text: 'ここに読み上げたいテキストを入力してください'
-        size_hint_y: 0.6 # 画面の60%を占める
+        size_hint_y: 0.6
         font_size: '18sp'
         multiline: True
         valign: 'top'
         padding: dp(10)
 
-    # 操作ボタンと言語選択をまとめる水平フレーム (Tkinterのbutton_frame)
     BoxLayout:
         orientation: 'horizontal'
-        size_hint_y: None # 高さを固定
+        size_hint_y: None
         height: dp(48)
         spacing: dp(5)
 
@@ -57,7 +54,6 @@
             width: dp(100)
             on_release: root.clear_text()
 
-    # メインの実行ボタン (Tkinterのcreate_button)
     Button:
         id: create_button
         text: '音声ファイルを作成して再生'
@@ -69,21 +65,18 @@
         color: 1, 1, 1, 1
         on_release: root.start_audio_process_threaded()
 
-    # 新しい再生ボタン (Kivy版では一旦コメントアウトまたは無効化)
-    # Kivyでファイルダイアログを使うには追加のライブラリが必要
     Button:
         id: play_folder_button
-        text: 'フォルダから再生 (PC版のみ)' # 機能はまだ実装せず、無効化
+        text: 'フォルダから再生 (PC版のみ)'
         size_hint_y: None
         height: dp(55)
         font_size: '18sp'
         background_normal: ''
-        background_color: 0.13, 0.59, 0.95, 1 # 青系の色
+        background_color: 0.13, 0.59, 0.95, 1
         color: 1, 1, 1, 1
         disabled: True # このボタンはPC版のみなので、Kivyでは一時的に無効化
         # on_release: root.start_folder_playback_threaded() # 後で実装
 
-    # ステータス表示用ラベル (Tkinterのstatus_label)
     Label:
         id: status_label
         text: root.status_text
@@ -92,4 +85,4 @@
         text_size: self.width, None
         halign: 'left'
         valign: 'top'
-        color: root.ids.status_label.color # Python側で設定した色を反映
+        color: root.ids.status_label.color
