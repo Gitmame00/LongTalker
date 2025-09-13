@@ -1,42 +1,90 @@
-import tkinter as tk
-from tkinter import ttk
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.properties import StringProperty, ListProperty
+from kivy.clock import Clock
+from kivy.lang import Builder
+
+# gTTSとre、datetimeはTkinter版からそのまま利用
 from gtts import gTTS
 import os
 import threading
-import playsound # 自動再生のために使用
-import re # 正規表現を使うために追加
-from datetime import datetime # フォルダ名に日時を使うために追加
+import re
+from datetime import datetime
 
-# --- 関数定義 ---
+# Tkinter版のplaysoundはAndroidで動作しないため、この段階ではインポートしない
 
-MAX_CHARS_PER_AUDIO = 300 # 1つの音声ファイルにする最大文字数 (適宜調整)
-AUDIO_DIR_NAME = "generated_audio" # 音声ファイルを保存するルートフォルダ名
+# --- KivyのUI部分 ---
+# KvファイルでUIの骨格を定義するため、Python側ではシンプルなAppクラスとルートウィジェットクラスを定義
+class LongTalkerLayout(BoxLayout):
+    # UIから参照するプロパティを定義 (KivyのPropertyシステム)
+    status_text = StringProperty("ここにステータスが表示されます")
+    selected_lang_display = StringProperty("日本語 (ja)") # 初期表示用
 
-def create_and_play_audio():
-    """音声を作成して再生する一連の処理を行う関数"""
-    original_text = text_entry.get("1.0", tk.END).strip()
-    lang = lang_combobox.get() # 選択された言語を取得
+    # Tkinterの言語リストをKivyのSpinner/Combobox用に変換して保持
+    # KivyではValuesを直接渡すのでListPropertyが便利
+    languages_for_kivy = ListProperty([
+        '日本語 (ja)', '英語 (en)', '韓国語 (ko)', '中国語 (zh-CN)',
+        'フランス語 (fr)', 'ドイツ語 (de)', 'スペイン語 (es)'
+    ])
 
-    if '(' in lang and ')' in lang:
-        lang_code = lang.split('(')[1][:-1]
-    else:
-        lang_code = lang # (ja, enなどの短い言語コードが直接入力された場合)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # 初期言語コード設定
+        self.lang_code = 'ja'
+        self.set_lang_code(self.selected_lang_display)
 
+    def set_lang_code(self, full_lang_name):
+        """言語選択が変更されたときに言語コードを更新する"""
+        if '(' in full_lang_name and ')' in full_lang_name:
+            self.lang_code = full_lang_name.split('(')[1][:-1]
+        else:
+            self.lang_code = full_lang_name
+        self.status_text = f"選択言語: {full_lang_name}"
+        print(f"言語コードを {self.lang_code} に設定しました。")
 
-    if not original_text:
-        status_label.config(text="テキストが入力されていません", fg="red")
-        set_buttons_state(tk.NORMAL)
-        return
-
-    set_buttons_state(tk.DISABLED)
-    status_label.config(text="テキストを分割中...", fg="blue")
-    root.update_idletasks()
-
-    try:
-        # --- 長文分割ロジック ---
-        segments = []
+    def start_audio_process(self):
+        """ボタンが押されたときに音声処理を開始する (スレッド利用)"""
+        original_text = self.ids.text_input.text.strip()
         
-        # 1. まず句点 (。) で分割する
+        if not original_text:
+            self.status_text = "テキストが入力されていません"
+            return
+
+        self.set_ui_state(False) # UIを無効化
+        self.status_text = "処理を開始します..."
+
+        # Tkinterと同じく別スレッドで重い処理を実行
+        thread = threading.Thread(target=self._create_and_play_audio_threaded, args=(original_text, self.lang_code))
+        thread.daemon = True
+        thread.start()
+
+    def _create_and_play_audio_threaded(self, original_text, lang_code):
+        """音声作成と再生の処理本体 (スレッド内で実行)"""
+        try:
+            self.update_status_on_main_thread("テキストを分割中...", "blue")
+
+            segments = self._split_long_text(original_text)
+
+            if not segments:
+                self.update_status_on_main_thread("分割可能なテキストが見つかりません", "red")
+                return
+
+            self.update_status_on_main_thread(f"テキストを {len(segments)} 個のセグメントに分割しました。", "green")
+            
+            # --- ここから音声ファイル作成・再生のロジックが続く ---
+            # 次のステップでここに音声作成・再生ロジックを実装します
+
+            self.update_status_on_main_thread("音声処理が完了しました (再生機能は未実装)。", "green")
+
+
+        except Exception as e:
+            self.update_status_on_main_thread(f"エラー: {e}", "red")
+        finally:
+            self.update_ui_state_on_main_thread(True) # UIを有効化
+
+    def _split_long_text(self, original_text):
+        """Tkinter版から移植した長文分割ロジック"""
+        segments = []
         sentences = re.split(r'(。)', original_text)
         current_segment = ""
 
@@ -44,7 +92,6 @@ def create_and_play_audio():
             sentence = sentences[i].strip()
             if i + 1 < len(sentences):
                 sentence += sentences[i+1] # 句点 (。) を結合
-
             if not sentence:
                 continue
 
@@ -71,123 +118,58 @@ def create_and_play_audio():
                 segment = segment[split_point:].strip()
             if segment:
                 final_segments.append(segment.strip())
+        return final_segments
 
-        if not final_segments:
-            status_label.config(text="分割可能なテキストが見つかりません", fg="red")
-            set_buttons_state(tk.NORMAL)
-            return
+    def update_status_on_main_thread(self, message, color_name="black"):
+        """メインスレッドでUIを更新するためのヘルパー"""
+        # Kivyはメインスレッド以外からのUI操作を推奨しないためClock.schedule_onceを使う
+        Clock.schedule_once(lambda dt: self._set_status_text_and_color(message, color_name))
 
-        status_label.config(text=f"テキストを {len(final_segments)} 個のセグメントに分割しました。", fg="green")
-        root.update_idletasks()
-        
-        # --- ここから新しい機能の実装 ---
+    def _set_status_text_and_color(self, message, color_name):
+        # Kvファイルで定義されたstatus_labelのテキストと色を変更
+        self.ids.status_label.text = message
+        color_map = {
+            "red": (1, 0, 0, 1),
+            "blue": (0, 0, 1, 1),
+            "green": (0, 1, 0, 1),
+            "orange": (1, 0.5, 0, 1),
+            "purple": (0.5, 0, 0.5, 1),
+            "black": (0, 0, 0, 1),
+        }
+        # KivyのColorクラスで色を直接指定
+        self.ids.status_label.color = color_map.get(color_name, (0, 0, 0, 1))
 
-        # 音声ファイルを保存するフォルダの準備
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # 最初の数文字をフォルダ名に含める (ファイルシステムに適した名前に)
-        folder_name_prefix = original_text[:20].replace(' ', '_').replace('　', '_')
-        # ファイル名に使えない文字をアンダースコアに変換（Windows/Linux/Mac共通）
-        folder_name_prefix = re.sub(r'[\\/:*?"<>|]', '_', folder_name_prefix)
-        audio_sub_dir = f"{folder_name_prefix}_{timestamp}"
-        
-        full_audio_path = os.path.join(AUDIO_DIR_NAME, audio_sub_dir)
-        os.makedirs(full_audio_path, exist_ok=True)
-        
-        audio_files_to_play = []
+    def update_ui_state_on_main_thread(self, enable):
+        """メインスレッドでUIの状態を一括変更するためのヘルパー"""
+        Clock.schedule_once(lambda dt: self._set_all_ui_state(enable))
 
-        for i, segment in enumerate(final_segments):
-            filename = os.path.join(full_audio_path, f"{i+1:03d}.mp3") # 例: 001.mp3
-            status_label.config(text=f"音声ファイル {i+1}/{len(final_segments)} を作成中...", fg="blue")
-            root.update_idletasks()
-
-            tts = gTTS(text=segment, lang=lang_code)
-            tts.save(filename)
-            audio_files_to_play.append(filename)
-
-        status_label.config(text=f"{len(audio_files_to_play)} 個の音声ファイルを作成しました。連続再生します...", fg="green")
-        root.update_idletasks()
-        
-        # --- 音声の連続再生 ---
-        for i, audio_file in enumerate(audio_files_to_play):
-            status_label.config(text=f"再生中: {i+1}/{len(audio_files_to_play)} - '{os.path.basename(audio_file)}'", fg="purple")
-            root.update_idletasks()
-            playsound.playsound(audio_file)
-        
-        status_label.config(text=f"すべての音声ファイルの再生が完了しました。フォルダ: '{full_audio_path}'", fg="green")
-
-    except Exception as e:
-        status_label.config(text=f"エラー: {e}", fg="red")
-    
-    finally:
-        set_buttons_state(tk.NORMAL)
+    def _set_all_ui_state(self, enable):
+        state = "normal" if enable else "disabled"
+        self.ids.create_button.disabled = not enable
+        self.ids.paste_button.disabled = not enable
+        self.ids.clear_button.disabled = not enable
+        self.ids.lang_spinner.disabled = not enable
 
 
-def start_audio_thread():
-    thread = threading.Thread(target=create_and_play_audio)
-    thread.daemon = True
-    thread.start()
+    def paste_text(self):
+        """クリップボードからテキストを貼り付ける"""
+        from kivy.core.clipboard import Clipboard
+        try:
+            text = Clipboard.get()
+            self.ids.text_input.text = text
+            self.update_status_on_main_thread("クリップボードから貼り付けました", "black")
+        except Exception as e:
+            self.update_status_on_main_thread(f"クリップボードエラー: {e}", "orange")
 
-def paste_text():
-    try:
-        text = root.clipboard_get()
-        text_entry.delete("1.0", tk.END)
-        text_entry.insert(tk.END, text)
-    except tk.TclError:
-        status_label.config(text="クリップボードが空です", fg="orange")
+    def clear_text(self):
+        """テキスト入力欄とステータス表示をクリアする"""
+        self.ids.text_input.text = ""
+        self.update_status_on_main_thread("テキスト入力欄をクリアしました", "black")
 
-def clear_text():
-    text_entry.delete("1.0", tk.END)
-    status_label.config(text="")
+class LongTalkerApp(App):
+    def build(self):
+        # longtalker.kv ファイルをロードしてUIを構築
+        return Builder.load_file('longtalker.kv')
 
-def set_buttons_state(state):
-    create_button.config(state=state)
-    paste_button.config(state=state)
-    clear_button.config(state=state)
-    lang_combobox.config(state=state)
-
-
-# --- Tkinterウィンドウのセットアップ ---
-root = tk.Tk()
-root.title("高機能・音声読み上げアプリ")
-root.geometry("450x350") # ウィンドウサイズを少し大きめに
-
-# --- ウィジェットの作成と配置 ---
-
-main_frame = tk.Frame(root, padx=10, pady=10)
-main_frame.pack(fill=tk.BOTH, expand=True)
-
-# テキスト入力エリア
-text_entry = tk.Text(main_frame, height=10, width=50, font=("Yu Gothic UI", 10))
-text_entry.pack(pady=(0, 10), fill=tk.BOTH, expand=True)
-
-# 操作ボタンをまとめるフレーム
-button_frame = tk.Frame(main_frame)
-button_frame.pack(fill=tk.X)
-
-# 言語選択のドロップダウンリスト (Combobox)
-lang_label = tk.Label(button_frame, text="言語:")
-lang_label.pack(side=tk.LEFT, padx=(0, 5))
-# 日本語の言語名に変更
-languages = ['日本語 (ja)', '英語 (en)', '韓国語 (ko)', '中国語 (zh-CN)', 'フランス語 (fr)', 'ドイツ語 (de)', 'スペイン語 (es)']
-lang_combobox = ttk.Combobox(button_frame, values=languages, width=15)
-lang_combobox.set('日本語 (ja)')  # デフォルトを日本語に設定
-lang_combobox.pack(side=tk.LEFT, padx=(0, 20))
-
-# 貼り付け、クリアボタン
-paste_button = tk.Button(button_frame, text="貼り付け", command=paste_text)
-paste_button.pack(side=tk.LEFT, padx=5)
-
-clear_button = tk.Button(button_frame, text="クリア", command=clear_text)
-clear_button.pack(side=tk.LEFT)
-
-# メインの実行ボタン
-create_button = tk.Button(main_frame, text="音声ファイルを作成して再生", command=start_audio_thread, font=("Yu Gothic UI", 11, "bold"), bg="#4CAF50", fg="white")
-create_button.pack(pady=10, fill=tk.X)
-
-# ステータス表示用ラベル
-status_label = tk.Label(main_frame, text="ここにステータスが表示されます", anchor="w", justify=tk.LEFT)
-status_label.pack(pady=(5, 0), fill=tk.X)
-
-
-# --- ウィンドウのメインループ ---
-root.mainloop()
+if __name__ == '__main__':
+    LongTalkerApp().run()
